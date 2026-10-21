@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nail Buddy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fff8ee; --ink: #2b2340; --muted: #7a6f8f; --card: #ffffff;
+    --pink: #ff8fb1; --pink-deep: #ef5f8f; --green: #6fd36a; --line: #eadfce;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: Nunito, ui-rounded, system-ui, sans-serif; overflow: hidden; }
+
+  /* ---------- start screen ---------- */
+  #start { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 30; background: var(--bg); }
+  .start-card { width: min(560px, 100%); text-align: center; }
+  .start-card h1 { font-size: clamp(34px, 6vw, 52px); margin: 8px 0 4px; font-weight: 900; }
+  .start-card p { color: var(--muted); margin: 0 0 22px; font-size: 18px; }
+  .start-card .germ-mini { width: 120px; height: 120px; }
+  .picks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  .pick { border: 3px solid var(--line); background: var(--card); border-radius: 18px; padding: 6px; cursor: pointer;
+    font: inherit; color: var(--ink); font-size: 13px; font-weight: 800; }
+  .pick img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 12px; display: block; margin-bottom: 4px; }
+  .pick[aria-pressed="true"] { border-color: var(--pink-deep); }
+  .row { display: flex; gap: 8px; margin-bottom: 18px; }
+  .row input { flex: 1; min-width: 0; border: 2px solid var(--line); border-radius: 14px; padding: 12px 14px; font: inherit; font-size: 15px; background: var(--card); color: var(--ink); }
+  .file-btn { border: 2px solid var(--line); border-radius: 14px; padding: 0 14px; display: grid; place-items: center; cursor: pointer; background: var(--card); font-weight: 800; white-space: nowrap; }
+  .go { width: 100%; border: 0; border-radius: 22px; padding: 18px; font: inherit; font-size: 24px; font-weight: 900;
+    color: #fff; background: var(--pink-deep); cursor: pointer; box-shadow: 0 6px 0 #c94374; }
+  .go:active { transform: translateY(3px); box-shadow: 0 3px 0 #c94374; }
+  .go:disabled { opacity: .6; cursor: wait; }
+  .fine { font-size: 13px; color: var(--muted); margin-top: 14px; }
+
+  /* ---------- player ---------- */
+  #stage { position: fixed; inset: 0; background: #000; }
+  #yt, #local { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #local { display: none; object-fit: contain; background: #000; }
+
+  /* ---------- the germ overlay ---------- */
+  #alert { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px;
+    background: radial-gradient(circle at 50% 40%, #fff6d8, #ffd6e4 70%); opacity: 0; pointer-events: none;
+    transition: opacity .18s ease; text-align: center; }
+  #alert.on { opacity: 1; pointer-events: auto; }
+  #alert .germ { width: min(46vh, 70vw); height: min(46vh, 70vw); animation: wobble 1.2s ease-in-out infinite; }
+  #alert h2 { font-size: clamp(36px, 7vw, 76px); font-weight: 900; margin: 6px 0 0; line-height: 1.05; }
+  #alert p { font-size: clamp(20px, 3.4vw, 34px); font-weight: 800; color: var(--pink-deep); margin: 10px auto 0;
+ }
+  /* keep the text clear of the camera preview in the bottom-right corner */
+  #alert h2, #alert p { max-width: max(260px, calc(60vw - 56px)); margin-left: auto; margin-right: auto; }
+  @keyframes wobble { 0%,100% { transform: rotate(-5deg) scale(1); } 50% { transform: rotate(5deg) scale(1.06); } }
+
+  /* ---------- parent corner: camera preview + controls ---------- */
+  #corner { position: fixed; right: 12px; bottom: 12px; z-index: 25; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  #preview { width: clamp(120px, 20vw, 220px); border-radius: 14px; border: 3px solid #fff; box-shadow: 0 4px 18px rgba(0,0,0,.35); background: #222; display: block; }
+  #corner.hide-cam #preview { display: none; }
+  .chip { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,.94); color: var(--ink); border-radius: 999px;
+    padding: 6px 8px 6px 12px; font-size: 13px; font-weight: 800; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; }
+  .dot.ok { background: var(--green); } .dot.warn { background: #ffb300; } .dot.bad { background: #e53935; }
+  .chip button { border: 0; background: #f1ebf7; border-radius: 999px; width: 30px; height: 30px; cursor: pointer; font-size: 15px; }
+
+  #panel { position: fixed; right: 12px; bottom: 64px; z-index: 26; width: min(320px, calc(100vw - 24px)); background: #fff; color: var(--ink);
+    border-radius: 18px; padding: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.3); display: none; font-size: 14px; }
+  #panel.open { display: block; }
+  #panel h3 { margin: 0 0 10px; font-size: 16px; }
+  #panel label { display: block; margin: 10px 0 2px; font-weight: 800; }
+  #panel input[type=range] { width: 100%; }
+  #panel select { width: 100%; border: 2px solid var(--line); border-radius: 10px; padding: 8px; font: inherit; background: #fff; }
+  #panel input[type=text] { width: 100%; border: 2px solid var(--line); border-radius: 10px; padding: 8px; font: inherit; }
+  #panel .stats { background: #faf6ff; border-radius: 12px; padding: 10px; margin-top: 12px; line-height: 1.6; }
+  #panel .btns { display: flex; gap: 8px; margin-top: 12px; }
+  #panel .btns button { flex: 1; border: 0; border-radius: 12px; padding: 10px; font: inherit; font-weight: 800; cursor: pointer; background: #f1ebf7; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-weight: 800; }
+  .check input { width: 18px; height: 18px; }
+</style>
+</head>
+<body>
+
+<!-- reusable cartoon germ -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="germ" viewBox="0 0 300 300">
+      <g fill="#7ed957" stroke="#3f9d3a" stroke-width="6">
+        <circle cx="150" cy="38" r="22"/><circle cx="236" cy="72" r="20"/><circle cx="268" cy="160" r="22"/>
+        <circle cx="228" cy="246" r="20"/><circle cx="150" cy="272" r="22"/><circle cx="70" cy="246" r="20"/>
+        <circle cx="32" cy="160" r="22"/><circle cx="64" cy="72" r="20"/>
+      </g>
+      <circle cx="150" cy="155" r="108" fill="#7ed957" stroke="#3f9d3a" stroke-width="6"/>
+      <circle cx="96" cy="96" r="12" fill="#a8ec8a"/><circle cx="214" cy="214" r="16" fill="#a8ec8a"/><circle cx="212" cy="104" r="8" fill="#a8ec8a"/>
+      <!-- eyes -->
+      <ellipse cx="112" cy="138" rx="30" ry="34" fill="#fff" stroke="#2b2340" stroke-width="5"/>
+      <ellipse cx="188" cy="138" rx="30" ry="34" fill="#fff" stroke="#2b2340" stroke-width="5"/>
+      <circle cx="120" cy="146" r="14" fill="#2b2340"/><circle cx="180" cy="146" r="14" fill="#2b2340"/>
+      <circle cx="125" cy="140" r="5" fill="#fff"/><circle cx="185" cy="140" r="5" fill="#fff"/>
+      <!-- cheeky brows -->
+      <path d="M84 98 Q110 84 136 100" fill="none" stroke="#2b2340" stroke-width="7" stroke-linecap="round"/>
+      <path d="M164 100 Q190 84 216 98" fill="none" stroke="#2b2340" stroke-width="7" stroke-linecap="round"/>
+      <!-- cheeks -->
+      <ellipse cx="80" cy="188" rx="16" ry="10" fill="#ff9fbf" opacity=".8"/>
+      <ellipse cx="220" cy="188" rx="16" ry="10" fill="#ff9fbf" opacity=".8"/>
+      <!-- grin with one tooth -->
+      <path d="M108 196 Q150 240 192 196 Z" fill="#7a2748" stroke="#2b2340" stroke-width="5" stroke-linejoin="round"/>
+      <rect x="140" y="197" width="18" height="16" rx="3" fill="#fff" stroke="#2b2340" stroke-width="3"/>
+      <path d="M128 216 Q150 230 172 216" fill="#ff7aa2"/>
+    </symbol>
+  </defs>
+</svg>
+
+<section id="start">
+  <div class="start-card">
+    <svg class="germ-mini"><use href="#germ"/></svg>
+    <h1>Nail Buddy</h1>
+    <p>The cartoon plays while hands stay away from the mouth</p>
+    <div class="picks" id="picks"></div>
+    <div class="row">
+      <input id="url" placeholder="or paste a YouTube link" autocomplete="off">
+      <label class="file-btn">File<input id="file" type="file" accept="video/*" hidden></label>
+    </div>
+    <button class="go" id="go">Start</button>
+    <div class="fine">The camera is processed only on this device. Nothing is recorded or sent anywhere.</div>
+  </div>
+</section>
+
+<div id="stage">
+  <div id="yt"></div>
+  <video id="local" playsinline controls></video>
+</div>
+
+<div id="alert" aria-live="assertive">
+  <div>
+    <svg class="germ"><use href="#germ"/></svg>
+    <h2 id="alertTitle">Oops! Hands in the mouth!</h2>
+    <p id="alertText">The germ wants to sneak in. Hands down and the cartoon comes back</p>
+  </div>
+</div>
+
+<div id="corner">
+  <canvas id="preview" width="320" height="240"></canvas>
+  <div class="chip"><span class="dot" id="dot"></span><span id="status">Loading…</span>
+    <button id="gear" title="Settings">⚙︎</button></div>
+</div>
+
+<div id="panel">
+  <h3>For parents</h3>
+  <label>Seconds at the mouth before pause: <span id="holdV"></span></label>
+  <input id="hold" type="range" min="0.5" max="4" step="0.1">
+  <label>How close to the mouth: <span id="distV"></span></label>
+  <input id="dist" type="range" min="0.15" max="0.7" step="0.01">
+  <label>What the germ says</label>
+  <input id="phrase" type="text">
+  <div class="check"><input id="voice" type="checkbox"><span>Voice</span></div>
+  <label>Camera</label>
+  <select id="camSel"></select>
+  <div class="check"><input id="cam" type="checkbox"><span>Show camera</span></div>
+  <div class="stats" id="stats"></div>
+  <div class="btns"><button id="test">Test</button><button id="reset">Reset count</button></div>
+</div>
+
+<video id="cam-video" playsinline muted style="display:none"></video>
+<script type="module" src="app.js"></script>
+</body>
+</html>
