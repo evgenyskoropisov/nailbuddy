@@ -15,6 +15,26 @@ export function mouthFromFace(face, w, h) {
   return { center, faceWidth };
 }
 
+// Long range: on the sofa 3-4 m away the face is too small for the face and hand models.
+// The body (pose) model still finds the kid, so we use it only to say WHERE the head is,
+// then crop that square (head plus room for hands) and run the precise models on the zoomed crop.
+const P_NOSE = 0, P_EAR_L = 7, P_EAR_R = 8, P_SHOULDER_L = 11, P_SHOULDER_R = 12;
+
+export function roiFromPose(pose, w, h) {
+  const nose = px(pose[P_NOSE], w, h);
+  const ears = dist(px(pose[P_EAR_L], w, h), px(pose[P_EAR_R], w, h));
+  const shoulders = dist(px(pose[P_SHOULDER_L], w, h), px(pose[P_SHOULDER_R], w, h));
+  const head = Math.max(ears, shoulders * 0.45); // ears ~ face width; shoulders keep it sane when the head turns
+  // generous: hands at the mouth stick out well past the face; never zoom tighter than ~28% of the frame
+  const side = Math.min(Math.max(head * 6, 0.28 * Math.min(w, h)), w, h);
+  const cx = nose.x, cy = nose.y + head * 0.6; // hands come up from below the chin
+  return {
+    x: Math.min(Math.max(cx - side / 2, 0), w - side),
+    y: Math.min(Math.max(cy - side / 2, 0), h - side),
+    side,
+  };
+}
+
 // Returns the closest fingertip distance, measured in face widths (scale-free:
 // works whether the kid sits close to the screen or far away).
 export function closestTip(hands, mouth, w, h) {

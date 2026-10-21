@@ -1,5 +1,5 @@
-import { FilesetResolver, HandLandmarker, FaceLandmarker } from './vendor/vision_bundle.mjs';
-import { createGuard, mouthFromFace, closestTip, FINGERTIPS } from './guard.js';
+import { FilesetResolver, HandLandmarker, FaceLandmarker, PoseLandmarker } from './vendor/vision_bundle.mjs';
+import { createGuard, mouthFromFace, closestTip, FINGERTIPS, roiFromPose } from './guard.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -123,7 +123,12 @@ function showAlert(on) {
 // ---------- vision ----------
 const camVideo = $('cam-video');
 const canvas = $('preview'), ctx = canvas.getContext('2d');
-let hands = null, face = null;
+let hands = null, face = null, pose = null;
+// the zoomed crop the face and hand models look at when the kid is far away
+const CROP = 512;
+const crop = document.createElement('canvas');
+crop.width = crop.height = CROP;
+const cropCtx = crop.getContext('2d');
 const guard = createGuard({ holdMs: settings.hold * 1000 });
 
 async function loadModels() {
@@ -137,8 +142,12 @@ async function loadModels() {
       baseOptions: { modelAssetPath: './models/face_landmarker.task', delegate },
       runningMode: 'VIDEO', numFaces: 1, minFaceDetectionConfidence: 0.4, minTrackingConfidence: 0.4,
     }),
+    PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: './models/pose_landmarker_full.task', delegate },
+      runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.4, minTrackingConfidence: 0.4,
+    }),
   ]);
-  try { [hands, face] = await make('GPU'); } catch { [hands, face] = await make('CPU'); }
+  try { [hands, face, pose] = await make('GPU'); } catch { [hands, face, pose] = await make('CPU'); }
 }
 const modelsReady = loadModels();
 
@@ -153,7 +162,7 @@ async function startCamera() {
     const which = settings.camId ? { deviceId: { exact: settings.camId } } : { facingMode: 'user' };
     try {
       camVideo.srcObject = await navigator.mediaDevices.getUserMedia({
-        video: { ...which, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
+        video: { ...which, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
       });
     } catch (err) {
       if (!settings.camId) throw err;
@@ -180,6 +189,7 @@ $('camSel').onchange = async () => { settings.camId = $('camSel').value; save();
 let lastRun = 0, lastStats = 0, lastMouth = null, lastFaceAt = -Infinity, sessionStart = 0;
 const eventLog = [], trace = [];
 const FACE_MEMORY_MS = 1500; // a hand over the mouth often hides the face: remember where the mouth was
+let roi = null, lastPoseAt = -Infinity;
 
 function setStatus(text, level) {
   $('status').textContent = text;
@@ -193,8 +203,27 @@ function tick() {
   lastRun = now;
 
   const W = camVideo.videoWidth, H = camVideo.videoHeight;
-  const handPts = hands.detectForVideo(camVideo, now).landmarks || [];
-  const faces = face.detectForVideo(camVideo, now).faceLandmarks || [];
+
+  // 1. find the kid anywhere in the frame (works from the sofa)
+  const poses = pose.detectForVideo(camVideo, now).landmarks || [];
+  if (poses.length) {
+    const next = roiFromPose(poses[0], W, H);
+    // smooth the crop so it doesn't jitter with every frame
+    roi = roi ? { x: roi.x + (next.x - roi.x) * 0.35, y: roi.y + (next.y - roi.y) * 0.35, side: roi.side + (next.side - roi.side) * 0.35 } : next;
+    lastPoseAt = now;
+  } else if (now - lastPoseAt > 1000) roi = null;
+
+  // 2. zoom in on the head and run the precise models there; close up, just use the whole frame
+  const zoomed = roi && roi.side < 0.8 * Math.min(W, H);
+  let source = camVideo, toFrame = (p) => p;
+  if (zoomed) {
+    const { x, y, side } = roi;
+    cropCtx.drawImage(camVideo, x, y, side, side, 0, 0, CROP, CROP);
+    source = crop;
+    toFrame = (p) => ({ x: (x + p.x * side) / W, y: (y + p.y * side) / H }); // crop coords -> frame coords
+  }
+  const handPts = (hands.detectForVideo(source, now).landmarks || []).map(h => h.map(toFrame));
+  const faces = (face.detectForVideo(source, now).faceLandmarks || []).map(f => f.map(toFrame));
 
   if (faces.length) { lastMouth = mouthFromFace(faces[0], W, H); lastFaceAt = now; }
   const mouth = now - lastFaceAt < FACE_MEMORY_MS ? lastMouth : null;
@@ -206,7 +235,7 @@ function tick() {
   }
 
   const ev = guard.update(now, near);
-  if (testSource && trace.length < 3000) trace.push([+camVideo.currentTime.toFixed(2), handPts.length, faces.length, tip ? +tip.ratio.toFixed(2) : null, guard.state.phase[0]]);
+  if (testSource && trace.length < 3000) trace.push([+camVideo.currentTime.toFixed(2), handPts.length, faces.length, poses.length, tip ? +tip.ratio.toFixed(2) : null, zoomed ? Math.round(roi.side) : null, guard.state.phase[0]]);
   if (ev) eventLog.push({ ev, at: +camVideo.currentTime.toFixed(2), ratio: tip ? +tip.ratio.toFixed(2) : null });
   if (ev === 'alert') showAlert(true);
   if (ev === 'release') showAlert(false);
@@ -216,11 +245,11 @@ function tick() {
   else if (!mouth) setStatus('No face', 'warn');
   else setStatus('Watching', 'ok');
 
-  if (settings.cam) draw(W, H, handPts, mouth, near, guard.progress(now));
+  if (settings.cam) draw(W, H, handPts, zoomed ? roi : null, mouth, near, guard.progress(now));
   if (now - lastStats > 1000) { lastStats = now; renderStats(now); }
 }
 
-function draw(W, H, handPts, mouth, near, progress) {
+function draw(W, H, handPts, zoomBox, mouth, near, progress) {
   const cw = canvas.width, ch = canvas.height, sx = cw / W, sy = ch / H;
   ctx.save();
   ctx.translate(cw, 0); ctx.scale(-1, 1); // mirror, like a selfie
@@ -241,6 +270,10 @@ function draw(W, H, handPts, mouth, near, progress) {
       ctx.arc(X(mouth.center.x), Y(mouth.center.y), r + 6, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
       ctx.stroke();
     }
+  }
+  if (zoomBox) { // the zoomed area, so a parent sees the app found the kid far away
+    ctx.lineWidth = 2; ctx.strokeStyle = '#5aa9ff';
+    ctx.strokeRect(cw - (zoomBox.x + zoomBox.side) * sx, zoomBox.y * sy, zoomBox.side * sx, zoomBox.side * sy);
   }
   for (const hand of handPts) {
     for (const i of FINGERTIPS) {

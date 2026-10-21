@@ -1,6 +1,6 @@
 // node test-guard.mjs
 import assert from 'node:assert/strict';
-import { createGuard, mouthFromFace, closestTip } from './guard.js';
+import { createGuard, mouthFromFace, closestTip, roiFromPose } from './guard.js';
 
 function run(frames, opts) {
   const g = createGuard(opts);
@@ -47,5 +47,19 @@ const seq = (from, to, near, step = 66) => {
   const hand = (x, y) => { const h = []; for (let i = 0; i < 21; i++) h[i] = { x: 0.9, y: 0.9 }; h[8] = { x, y }; return h; };
   assert.ok(closestTip([hand(0.51, 0.61)], mouth, 640, 480).ratio < 0.1);
   assert.ok(closestTip([hand(0.33, 0.45)], mouth, 640, 480).ratio > 0.5);
+}
+// 6. Crop around a small, far-away kid: square, inside the frame, centered near the face
+{
+  const pose = []; for (let i = 0; i < 33; i++) pose[i] = { x: 0.5, y: 0.5 };
+  pose[0] = { x: 0.7, y: 0.4 }; pose[7] = { x: 0.68, y: 0.39 }; pose[8] = { x: 0.72, y: 0.39 };
+  pose[11] = { x: 0.65, y: 0.5 }; pose[12] = { x: 0.75, y: 0.5 };
+  const r = roiFromPose(pose, 1280, 720);
+  assert.ok(r.side > 200 && r.side < 400, 'side ' + r.side);
+  assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.side <= 1280 && r.y + r.side <= 720);
+  assert.ok(Math.abs(r.x + r.side / 2 - 0.7 * 1280) < 2);
+  // a kid right at the camera: the crop is clamped to the frame
+  pose[11] = { x: 0.1, y: 0.9 }; pose[12] = { x: 0.9, y: 0.9 };
+  const big = roiFromPose(pose, 1280, 720);
+  assert.equal(big.side, 720);
 }
 console.log('all guard tests passed');
