@@ -4,43 +4,91 @@ import { createGuard, mouthFromFace, closestTip, FINGERTIPS, roiFromPose } from 
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings (per device, best effort) ----------
-const DEFAULTS = { hold: 1.5, dist: 0.32, phrase: 'Oops! Hands down, and the cartoon comes back!', voice: false, cam: true, camId: '' };
+const DEFAULTS = { hold: 1.5, dist: 0.32, phrase: 'Oops! Hands down, and the cartoon comes back!', voice: false, cam: true, camId: '', shelf: [] };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('nailbuddy.settings.en') || '{}')); } catch {}
 const save = () => { try { localStorage.setItem('nailbuddy.settings.en', JSON.stringify(settings)); } catch {} };
 
-// ---------- cartoons ----------
-const CARTOONS = [
-  { id: '2aWUgbdD4L0', label: 'Peppa\'s perfume' },
-  { id: '9qShcQMq1cA', label: 'Water slide' },
-  { id: '_8j4Vxb4DRI', label: 'Peppa and the weather' },
+// ---------- cartoons: the parent's own shelf (saved on this device) + a few defaults ----------
+const DEFAULT_CARTOONS = [
+  { v: '2aWUgbdD4L0', title: 'Peppa\'s perfume' },
+  { v: '9qShcQMq1cA', title: 'Water slide' },
+  { v: '_8j4Vxb4DRI', title: 'Peppa and the weather' },
 ];
-let chosen = { kind: 'yt', id: CARTOONS[0].id };
+let chosen = null;
 
-function youtubeId(text) {
+// Accepts a video link, a playlist link, or a video-inside-a-playlist link
+function parseLink(text) {
   const t = text.trim();
-  if (/^[\w-]{11}$/.test(t)) return t;
-  const m = t.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/);
-  return m ? m[1] : null;
+  const list = t.match(/[?&]list=([\w-]{10,})/)?.[1] || null;
+  const v = /^[\w-]{11}$/.test(t) ? t : t.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/)?.[1] || null;
+  return v || list ? { v, list } : null;
 }
+const thumbOf = (c) => c.thumb || (c.v ? `https://i.ytimg.com/vi/${c.v}/mqdefault.jpg` : '');
+const sameItem = (a, b) => a && b && a.v === b.v && a.list === b.list;
 
 const picks = $('picks');
-CARTOONS.forEach((c, i) => {
-  const b = document.createElement('button');
-  b.className = 'pick';
-  b.setAttribute('aria-pressed', i === 0);
-  b.innerHTML = `<img alt="" src="https://i.ytimg.com/vi/${c.id}/mqdefault.jpg">${c.label}`;
-  b.onclick = () => {
-    picks.querySelectorAll('.pick').forEach(p => p.setAttribute('aria-pressed', p === b));
-    $('url').value = '';
-    chosen = { kind: 'yt', id: c.id };
-  };
-  picks.appendChild(b);
-});
-$('url').oninput = () => {
-  const id = youtubeId($('url').value);
-  if (id) { chosen = { kind: 'yt', id }; picks.querySelectorAll('.pick').forEach(p => p.setAttribute('aria-pressed', false)); }
-};
+function renderShelf() {
+  picks.innerHTML = '';
+  const mine = settings.shelf.map(c => ({ ...c, mine: true }));
+  for (const c of [...mine, ...DEFAULT_CARTOONS.map(d => ({ ...d, list: null }))]) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pick-wrap';
+    const b = document.createElement('button');
+    b.className = 'pick';
+    b.setAttribute('aria-pressed', sameItem(c, chosen));
+    b.innerHTML = `<span class="thumb">${thumbOf(c) ? `<img alt="" src="${thumbOf(c)}">` : ''}${c.list ? '<em>Playlist</em>' : ''}</span><span class="t"></span>`;
+    b.querySelector('.t').textContent = c.title;
+    b.onclick = () => { chosen = { kind: 'yt', v: c.v, list: c.list }; $('url').value = ''; renderShelf(); };
+    wrap.appendChild(b);
+    if (c.mine) {
+      const x = document.createElement('button');
+      x.className = 'remove'; x.title = 'Remove'; x.textContent = '×';
+      x.onclick = () => {
+        settings.shelf = settings.shelf.filter(s => !sameItem(s, c)); save();
+        if (sameItem(c, chosen)) chosen = null;
+        pickDefault(); renderShelf();
+      };
+      wrap.appendChild(x);
+    }
+    picks.appendChild(wrap);
+  }
+}
+function pickDefault() {
+  if (chosen) return;
+  const first = settings.shelf[0] || DEFAULT_CARTOONS[0];
+  chosen = { kind: 'yt', v: first.v, list: first.list || null };
+}
+
+async function addFromLink() {
+  const link = parseLink($('url').value);
+  const hint = $('hint');
+  if (!link) { hint.textContent = 'That doesn\'t look like a YouTube link.'; return; }
+  hint.textContent = 'Adding…';
+  const page = link.list && !link.v
+    ? `https://www.youtube.com/playlist?list=${link.list}`
+    : `https://www.youtube.com/watch?v=${link.v}`;
+  let title = link.list ? 'My playlist' : 'My cartoon', thumb = '';
+  try {
+    const r = await fetch('https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent(page));
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    title = d.title || title; thumb = d.thumbnail_url || '';
+  } catch {
+    hint.textContent = 'YouTube won\'t share this one. If it\'s your playlist, set it to Unlisted or Public (Private ones can\'t play here).';
+    return;
+  }
+  const item = { v: link.v, list: link.list, title: title.slice(0, 60), thumb };
+  settings.shelf = [item, ...settings.shelf.filter(s => !sameItem(s, item))].slice(0, 24);
+  save();
+  chosen = { kind: 'yt', v: item.v, list: item.list };
+  $('url').value = ''; hint.textContent = 'Saved on this device.';
+  renderShelf();
+}
+$('add').onclick = addFromLink;
+$('url').onkeydown = (e) => { if (e.key === 'Enter') addFromLink(); };
+pickDefault();
+renderShelf();
 $('file').onchange = () => {
   const f = $('file').files[0];
   if (f) { chosen = { kind: 'file', url: URL.createObjectURL(f) }; $('go').textContent = 'Start: ' + f.name.slice(0, 24); }
@@ -64,9 +112,11 @@ async function startPlayer() {
     return;
   }
   await ytReady;
+  const vars = { autoplay: 1, rel: 0, playsinline: 1, modestbranding: 1, origin: location.origin };
+  if (chosen.list) Object.assign(vars, { listType: 'playlist', list: chosen.list });
   yt = new YT.Player('yt', {
-    videoId: chosen.id,
-    playerVars: { autoplay: 1, rel: 0, playsinline: 1, modestbranding: 1, origin: location.origin },
+    ...(chosen.v ? { videoId: chosen.v } : {}),
+    playerVars: vars,
     events: { onReady: (e) => e.target.playVideo() },
   });
 }
